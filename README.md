@@ -6,7 +6,7 @@
 - 客户端/订阅链接**永久不变**,IP 轮换对用户完全透明
 - 探测不是 TCP ping,而是**真实 VLESS xHTTP 全链路探测**(起临时 Xray 实例走完整隧道)
 - 轮换只改一条灰云 DNS 记录(Cloudflare API),**不碰 x-ui 数据库、不重启任何服务**
-- 带防抖动(当前 IP 仍在最优 1.2 倍内则保持)、文件锁、失败回滚、数据库自动备份
+- 带防抖动(EWMA 历史加权 + 当前 IP 仍在最优 1.2 倍内则保持)、文件锁、失败回滚、数据库自动备份
 
 ## 架构
 
@@ -35,11 +35,11 @@
 
 ═══════════════ 控制面:定时轮换 ═══════════════
 
-  systemd timer(默认 6h + 随机延迟)
+  systemd timer(默认 30min + 随机延迟)
       └─> cf-xui-rotate.py
             ├─ 1. 解析候选域名 → 过滤出 Cloudflare 官方 IPv4 段
             ├─ 2. 逐个发起真实 xHTTP 探测(临时 Xray + curl)
-            ├─ 3. 选最快;当前 IP 在 1.2× 内则保持(防抖动)
+            ├─ 3. EWMA 历史加权后选最快;当前 IP 在 1.2× 内则保持(防抖动)
             ├─ 4. 调 Cloudflare API 更新灰云 A 记录(TTL 120s)
             └─ 5. 状态落盘 + 日志;DNS 失败只报错不动线上
 ```
@@ -105,6 +105,7 @@ sudo tail -f /var/log/cf-xui-rotate.log
 | `CANDIDATE_DOMAINS` | 否 | 候选域名,逗号分隔 |
 | `DNS_TTL` | 否 | DNS 记录 TTL,默认 120 秒 |
 | `PROBE_ROUNDS` | 否 | 每个候选的探测轮数(取中位数),默认 2 |
+| `EWMA_ALPHA` | 否 | 探测结果历史加权系数(0~1),默认 0.3;越小越抗抖动 |
 | `TEST_URL` | 否 | 探测目标 URL,默认 cloudflare trace |
 
 ## 测速工具

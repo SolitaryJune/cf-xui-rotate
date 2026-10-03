@@ -51,6 +51,7 @@ _CFG_DEFAULTS = {
     "CANDIDATE_DOMAINS": "openai.com,cloudflare.com,www.cloudflare.com,workers.dev",
     "DNS_TTL": "120",
     "PROBE_ROUNDS": "2",
+    "EWMA_ALPHA": "0.3",        # 0 = 纯本次探测;0.3 表示历史权重 70%
 }
 
 
@@ -79,6 +80,7 @@ INBOUND_ID = int(CFG["INBOUND_ID"] or 1)
 HOSTS_REMARK = CFG["HOSTS_REMARK"]
 DNS_TTL = int(CFG["DNS_TTL"] or 120)
 PROBE_ROUNDS = int(CFG["PROBE_ROUNDS"] or 2)
+EWMA_ALPHA = float(CFG["EWMA_ALPHA"] or 0.3)
 OPT_DOMAIN = CFG["OPT_DOMAIN"]
 CANDIDATE_DOMAINS = tuple(
     d.strip() for d in CFG["CANDIDATE_DOMAINS"].split(",") if d.strip()
@@ -389,15 +391,26 @@ def main():
             return 0
 
         results = [r for r in (measure(ip, client_id) for ip in ips) if r]
-        results.sort(key=lambda item: item["total"])
         if not results:
             log("all real xHTTP candidate probes failed; endpoint unchanged")
             return 0
 
-        best = results[0]
-        current_result = next((item for item in results if item["ip"] == current), None)
-        if current_result and current_result["total"] <= best["total"] * 1.20:
-            chosen, reason = current_result, "keep-current"
+        # EWMA 平滑:单轮测速噪声大,按历史指数加权后再排名,减少来回跳
+        alpha = EWMA_ALPHA
+        history = state.get("ewma", {})
+        scored = []
+        for item in results:
+            prev = history.get(item["ip"])
+            ewma = item["total"] if prev is None else alpha * item["total"] + (1 - alpha) * prev
+            scored.append({"ip": item["ip"], "total": item["total"], "ewma": ewma,
+                           "samples": item["samples"]})
+        state["ewma"] = {s["ip"]: s["ewma"] for s in scored}
+        scored.sort(key=lambda item: item["ewma"])
+
+        best = scored[0]
+        current_scored = next((item for item in scored if item["ip"] == current), None)
+        if current_scored and current_scored["ewma"] <= best["ewma"] * 1.20:
+            chosen, reason = current_scored, "keep-current"
         else:
             chosen, reason = best, "select-best"
 
@@ -416,9 +429,9 @@ def main():
             state["changed_at"] = datetime.now(timezone.utc).isoformat()
             state.pop("dns_error", None)
             log(f"changed {current or '-'} -> {chosen['ip']} "
-                f"xhttp={chosen['total']:.3f}s reason={reason} dns={action}")
+                f"xhttp={chosen['total']:.3f}s ewma={chosen['ewma']:.3f}s reason={reason} dns={action}")
         else:
-            log(f"kept {chosen['ip']} xhttp={chosen['total']:.3f}s reason={reason}")
+            log(f"kept {chosen['ip']} xhttp={chosen['total']:.3f}s ewma={chosen['ewma']:.3f}s reason={reason}")
 
         state["last_run"] = datetime.now(timezone.utc).isoformat()
         state["last_results"] = results[:12]
