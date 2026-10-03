@@ -1,0 +1,11 @@
+[Unit]
+Description=Probe Cloudflare edges and rotate x-ui endpoint
+After=network-online.target x-ui.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/cf-xui-rotate
+User=root
+PrivateTmp=true
+NoNewPrivileges=true

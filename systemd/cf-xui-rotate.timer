@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Cloudflare x-ui edge rotation periodically
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=6h
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target
